@@ -1,0 +1,7 @@
+slack-bolt
+apscheduler
+python-dotenv
+google-generativeai
+pinecone
+langchain-text-splitters
+pypdf
