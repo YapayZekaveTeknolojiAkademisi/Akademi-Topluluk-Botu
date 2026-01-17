@@ -131,95 +131,29 @@ def is_admin(user_id: str) -> bool:
 
 # --- 1. Kahve Eşleşmesi ---
 @app.command("/kahve")
-def handle_coffee_command(ack, body, client):
-    """Kahve eşleşmesi daveti gönderir."""
+def handle_coffee_command(ack, body):
+    """Kahve eşleşmesi isteği gönderir (Bekleme Havuzu Sistemi)."""
     ack()
     user_id = body["user_id"]
     channel_id = body["channel_id"]
     
-    try:
-        user_info = user_manager.get_user_info(user_id)
-        user_name = user_info.get("real_name", "Topluluk Üyemiz")
-        
-        chat_manager.post_message(
-            channel=channel_id,
-            text=f"☕ {user_name} kahve molası vermek istiyor!",
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"☕ *{user_name}* topluluğumuzla kahve molası vermek istiyor! \\nEşlik etmek ister misin?"
-                    }
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "Birlikte İçelim! ☕"},
-                            "style": "primary",
-                            "value": user_id,
-                            "action_id": "join_coffee"
-                        }
-                    ]
-                }
-            ]
-        )
-        logger.info(f"[+] Kahve daveti gönderildi: {user_name} ({user_id})")
-    except Exception as e:
-        logger.error(f"[X] Kahve daveti hatası: {e}")
-        chat_manager.post_ephemeral(
-            channel=channel_id, 
-            user=user_id, 
-            text="❌ Davet oluşturulurken bir hata oluştu."
-        )
-
-@app.action("join_coffee")
-def handle_join_coffee(ack, body):
-    """Kahve davetine katılımı işler."""
-    ack()
-    user2_id = body["user"]["id"]
-    user1_id = body["actions"][0]["value"]
-    channel_id = body["channel"]["id"]
-    message_ts = body["container"]["message_ts"]
+    async def process_coffee_request():
+        try:
+            response_msg = await coffee_service.request_coffee(user_id, channel_id)
+            chat_manager.post_ephemeral(
+                channel=channel_id,
+                user=user_id,
+                text=response_msg
+            )
+        except Exception as e:
+            logger.error(f"[X] Kahve isteği hatası: {e}")
+            chat_manager.post_ephemeral(
+                channel=channel_id,
+                user=user_id,
+                text="❌ Kahve isteğiniz işlenirken bir hata oluştu."
+            )
     
-    if user1_id == user2_id:
-        chat_manager.post_ephemeral(
-            channel=channel_id,
-            user=user2_id,
-            text="Bu davete şimdilik sadece topluluk üyelerimiz katılabilir. ✨"
-        )
-        return
-    
-    try:
-        u1_info = user_manager.get_user_info(user1_id)
-        u2_info = user_manager.get_user_info(user2_id)
-        u1_name = u1_info.get("real_name", "Kullanıcı 1")
-        u2_name = u2_info.get("real_name", "Kullanıcı 2")
-        
-        # Daveti kapat
-        chat_manager.update_message(
-            channel=channel_id,
-            ts=message_ts,
-            text="Kahve eşleşmesi tamamlandı! ✨",
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"✅ *{u1_name}* ve *{u2_name}* kahve molasında buluştu! \\nKeyifli paylaşımlar dileriz. ✨☕"
-                    }
-                }
-            ]
-        )
-        
-        # Eşleşmeyi başlat (async)
-        asyncio.create_task(coffee_service.start_match(user1_id, user2_id))
-        logger.info(f"[+] Kahve eşleşmesi: {u1_name} & {u2_name}")
-        
-    except Exception as e:
-        logger.error(f"[X] Kahve eşleşme hatası: {e}")
+    asyncio.create_task(process_coffee_request())
 
 # --- 2. Oylama Sistemi ---
 @app.command("/oylama")
