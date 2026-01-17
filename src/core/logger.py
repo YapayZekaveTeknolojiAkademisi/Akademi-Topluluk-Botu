@@ -65,6 +65,33 @@ class SlackBotFormatter(logging.Formatter):
             
         return formatted_msg
 
+class FileFormatter(logging.Formatter):
+    """
+    Dosya logları için özel formatter.
+    user ve cmd alanlarını güvenli şekilde işler (Python 3.8+ uyumluluğu için).
+    """
+    
+    def __init__(self, fmt=None, datefmt=None, defaults=None):
+        # Python 3.8+ için defaults desteği
+        self._defaults = defaults or {}
+        
+        # Python 3.8+ için defaults parametresi destekleniyor mu kontrol et
+        try:
+            # Python 3.8+ için defaults parametresi ile dene
+            super().__init__(fmt, datefmt, defaults=self._defaults)
+        except TypeError:
+            # Eski Python versiyonları için fallback (defaults parametresi yok)
+            super().__init__(fmt, datefmt)
+    
+    def format(self, record):
+        # user ve cmd alanlarını güvenli şekilde ekle
+        if not hasattr(record, 'user'):
+            record.user = self._defaults.get('user', 'SYSTEM')
+        if not hasattr(record, 'cmd'):
+            record.cmd = self._defaults.get('cmd', 'N/A')
+        
+        return super().format(record)
+
 class CemilLogger(logging.Logger):
     """
     Slack Botuna özel metodları olan genişletilmiş Logger sınıfı.
@@ -101,7 +128,7 @@ def setup_logger(name="CemilBot", log_file="logs/cemil_detailed.log"):
     logger.addHandler(console_handler)
 
     # 2. Rotating File Handler (JSON veya Yapısal format için uygun)
-    file_formatter = logging.Formatter(
+    file_formatter = FileFormatter(
         "%(asctime)s | %(levelname)-8s | [%(user)s] [%(cmd)s] %(message)s",
         datefmt='%Y-%m-%d %H:%M:%S',
         defaults={"user": "SYSTEM", "cmd": "N/A"}
@@ -113,6 +140,7 @@ def setup_logger(name="CemilBot", log_file="logs/cemil_detailed.log"):
         encoding="utf-8"
     )
     file_handler.setFormatter(file_formatter)
+    file_handler.setLevel(logging.INFO)
     logger.addHandler(file_handler)
 
     return logger
