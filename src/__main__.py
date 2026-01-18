@@ -15,6 +15,7 @@ from src.bot import app, db_client, cron_client, birthday_service, knowledge_ser
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 import asyncio
 from src.core.logger import logger
+from src.core.settings import get_settings
 from dotenv import load_dotenv
 
 # Global handler değişkeni (shutdown için)
@@ -90,12 +91,11 @@ def main():
     # Ayrıca atexit ile de kaydet (program normal sonlanırsa)
     atexit.register(graceful_shutdown)
     
-    # Kritik environment variable kontrolü
-    required_vars = ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "GROQ_API_KEY"]
-    missing_vars = [var for var in required_vars if not os.environ.get(var)]
-    
-    if missing_vars:
-        logger.error(f"[X] Eksik environment variables: {', '.join(missing_vars)}")
+    # Settings kontrolü
+    try:
+        settings = get_settings()
+    except Exception as e:
+        logger.error(f"[X] Konfigürasyon yükleme hatası: {e}")
         logger.error("[X] Lütfen .env dosyasını kontrol edin!")
         return
     
@@ -110,7 +110,7 @@ def main():
     # --- CSV Veri İçe Aktarma Kontrolü ---
     # Klasörlerin varlığını kontrol et
     os.makedirs("data", exist_ok=True)
-    os.makedirs("knowledge_base", exist_ok=True)
+    os.makedirs(settings.knowledge_base_path, exist_ok=True)
     os.makedirs("logs", exist_ok=True)
     
     CSV_PATH = "data/initial_users.csv"
@@ -161,10 +161,7 @@ def main():
     birthday_service.schedule_daily_check(hour=9, minute=0)
 
     # 3. Vektör Veritabanı Kontrolü
-    VECTOR_INDEX_PATH = "data/vector_store.index"
-    VECTOR_PKL_PATH = "data/vector_store.pkl"
-    
-    vector_index_exists = os.path.exists(VECTOR_INDEX_PATH) and os.path.exists(VECTOR_PKL_PATH)
+    vector_index_exists = os.path.exists(settings.vector_store_path) and os.path.exists(settings.vector_store_pkl_path)
     
     if vector_index_exists:
         # Mevcut veriler var
@@ -187,16 +184,15 @@ def main():
         print("[+] Vektör veritabanı başarıyla oluşturuldu.")
 
     # 4. Slack
-    app_token = os.environ.get("SLACK_APP_TOKEN")
-    if not app_token:
+    if not settings.slack_app_token:
         logger.error("[X] SLACK_APP_TOKEN eksik!")
         return
 
     logger.info("[>] Slack Bağlantısı kuruluyor...")
     
     # Başlangıç Mesajı Kontrolü
-    startup_channel = os.environ.get("SLACK_STARTUP_CHANNEL")
-    github_repo = os.environ.get("GITHUB_REPO")
+    startup_channel = settings.startup_channel
+    github_repo = settings.github_repo
     
     if startup_channel:
         print(f"\n[?] Başlangıç kanalı bulundu: {startup_channel}")
@@ -212,12 +208,16 @@ def main():
                     "🗳️ *`/oylama`* - Hızlı ve demokratik anketler başlat (Admin).\n"
                     "📝 *`/geri-bildirim`* - Akademi ekibine anonim olarak fikir/önerilerini ilet.\n"
                     "🧠 *`/sor`* - Akademi dökümanları ile oluşturulan bilgi havuzuna soru sor.\n"
-                    "👤 *`/profilim`* - Sistemdeki kayıtlı bilgilerini görüntüle.\n\n"
+                    "👤 *`/profilim`* - Sistemdeki kayıtlı bilgilerini görüntüle.\n"
+                    "🏥 *`/cemil-health`* - Bot sağlık durumunu kontrol et.\n\n"
                     "Güzel bir gün dilerim! ✨"
                 )
                 
-                if github_repo:
-                    startup_text += f"\n\n📚 Kaynak kod: {github_repo}"
+                if github_repo and "SİZİN_KULLANICI_ADINIZ" not in github_repo:
+                    startup_text += f"\n\n📚 *Kaynaklar:*\n"
+                    startup_text += f"• <{github_repo}/blob/main/README.md|Kullanım Kılavuzu>\n"
+                    startup_text += f"• <{github_repo}/blob/main/CHANGELOG.md|Neler Yeni?>\n"
+                    startup_text += f"• <{github_repo}/blob/main/CONTRIBUTING.md|Katkıda Bulun>"
                 
                 startup_blocks = [
                     {
@@ -249,7 +249,7 @@ def main():
     print("           BOT ÇALIŞIYOR - CTRL+C ile durdurun")
     print("="*60 + "\n")
 
-    handler = SocketModeHandler(app, app_token)
+    handler = SocketModeHandler(app, settings.slack_app_token)
     
     try:
         handler.start()
