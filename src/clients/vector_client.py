@@ -46,10 +46,18 @@ class VectorClient(metaclass=SingletonMeta):
         self.save_index()
         logger.info(f"[+] {len(texts)} yeni parça vektör indeksine eklendi.")
 
-    def search(self, query: str, top_k: int = 3, threshold: float = 1.5) -> List[Dict]:
+    def search(self, query: str, top_k: int = 5, threshold: float = 0.8) -> List[Dict]:
         """
         Soruya en yakın metin parçalarını döner.
-        threshold: L2 mesafesi için maksimum eşik. Bu değerden büyük (uzak) sonuçlar elenir.
+        
+        Args:
+            query: Arama sorgusu
+            top_k: Dönecek maksimum sonuç sayısı (varsayılan: 5)
+            threshold: L2 mesafesi için maksimum eşik (varsayılan: 0.8)
+                      Küçük değer = sıkı eşleşme, büyük değer = gevşek eşleşme
+        
+        Returns:
+            Eşleşen dökümanlar listesi (score ile sıralı)
         """
         if self.index is None or not self.documents:
             logger.warning(f"[!] Vector search: İndeks veya döküman yok | Toplam döküman: {len(self.documents) if self.documents else 0}")
@@ -58,11 +66,12 @@ class VectorClient(metaclass=SingletonMeta):
         query_embedding = self.model.encode([query])
         query_embedding = np.array(query_embedding).astype('float32')
 
-        # Daha fazla sonuç al, sonra filtrele
-        search_k = min(top_k * 3, len(self.documents)) if self.documents else top_k
+        # Daha fazla sonuç al, sonra filtrele (top_k * 4 ile daha geniş arama)
+        search_k = min(top_k * 4, len(self.documents)) if self.documents else top_k
         distances, indices = self.index.search(query_embedding, search_k)
         
         results = []
+        filtered_count = 0
         for i, idx in enumerate(indices[0]):
             if idx != -1 and idx < len(self.documents):
                 distance = float(distances[0][i])
@@ -72,15 +81,17 @@ class VectorClient(metaclass=SingletonMeta):
                     doc["score"] = distance
                     results.append(doc)
                 else:
-                    logger.debug(f"[i] Sonuç mesafe eşiğine takıldı: {distance:.3f} > {threshold}")
+                    filtered_count += 1
+                    if filtered_count <= 3:  # İlk 3 filtrelenen sonucu logla
+                        logger.debug(f"[i] Sonuç filtrelendi: score={distance:.3f} > threshold={threshold}")
         
         # En iyi sonuçları döndür (top_k kadar)
         results = sorted(results, key=lambda x: x.get('score', float('inf')))[:top_k]
         
         if results:
-            logger.debug(f"[i] Vector search: {len(results)} sonuç bulundu (threshold: {threshold})")
+            logger.debug(f"[i] Vector search: {len(results)}/{search_k} sonuç döndürüldü (threshold: {threshold}, {filtered_count} filtrelendi)")
         else:
-            logger.debug(f"[!] Vector search: Hiç sonuç bulunamadı (threshold: {threshold}, sorgu: {query[:50]}...)")
+            logger.debug(f"[!] Vector search: Hiç uygun sonuç yok (threshold: {threshold}, toplam: {search_k}, filtrelenen: {filtered_count})")
         
         return results
 
