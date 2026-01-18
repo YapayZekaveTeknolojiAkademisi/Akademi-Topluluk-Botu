@@ -44,7 +44,8 @@ from src.services import (
     VotingService,
     FeedbackService,
     KnowledgeService,
-    HelpService
+    HelpService,
+    StatisticsService
 )
 
 # --- Handlers ---
@@ -55,7 +56,8 @@ from src.handlers import (
     setup_knowledge_handlers,
     setup_profile_handlers,
     setup_health_handlers,
-    setup_help_handlers
+    setup_help_handlers,
+    setup_statistics_handlers
 )
 
 # ============================================================================
@@ -126,6 +128,9 @@ knowledge_service = KnowledgeService(
 help_service = HelpService(
     chat_manager, conv_manager, user_manager, help_repo, user_repo, groq_client, cron_client
 )
+statistics_service = StatisticsService(
+    user_repo, match_repo, help_repo, feedback_repo, poll_repo, vote_repo
+)
 logger.info("[+] Servisler hazır.")
 
 # ============================================================================
@@ -140,6 +145,7 @@ setup_knowledge_handlers(app, knowledge_service, chat_manager, user_repo)
 setup_profile_handlers(app, chat_manager, user_repo)
 setup_health_handlers(app, chat_manager, db_client, groq_client, vector_client)
 setup_help_handlers(app, help_service, chat_manager, user_repo)
+setup_statistics_handlers(app, statistics_service, chat_manager, user_repo)
 logger.info("[+] Handler'lar kaydedildi.")
 
 # ============================================================================
