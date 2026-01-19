@@ -346,23 +346,20 @@ def setup_challenge_handlers(
                 )
                 return
             
-            # Değerlendirme başlat
-            result = await evaluation_service.start_evaluation(
-                challenge["id"],
-                channel_id
-            )
-            
-            if result["success"]:
+            # Challenge'ı kapat (_close_challenge fonksiyonu değerlendirmeyi başlatır ve kanalı arşivler)
+            try:
+                await challenge_service._close_challenge(challenge["id"], channel_id)
                 chat_manager.post_ephemeral(
                     channel=channel_id,
                     user=user_id,
-                    text="✅ Challenge bitirildi! Değerlendirme başlatıldı."
+                    text="✅ Challenge bitirildi! Değerlendirme başlatıldı ve kanal arşivlendi."
                 )
-            else:
+            except Exception as e:
+                logger.error(f"[X] Challenge bitirme hatası: {e}", exc_info=True)
                 chat_manager.post_ephemeral(
                     channel=channel_id,
                     user=user_id,
-                    text=f"❌ Değerlendirme başlatılamadı: {result.get('message', 'Bilinmeyen hata')}"
+                    text=f"❌ Challenge bitirilirken hata oluştu: {str(e)}"
                 )
         
         asyncio.run(process_finish())
