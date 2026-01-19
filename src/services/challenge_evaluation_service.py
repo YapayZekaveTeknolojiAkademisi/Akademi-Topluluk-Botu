@@ -346,7 +346,8 @@ class ChallengeEvaluationService:
     ) -> Dict[str, Any]:
         """
         Kullanıcının oyunu kaydeder.
-        Sadece değerlendiriciler oy verebilir (proje üyeleri olamaz).
+        Sadece harici değerlendiriciler (max 3 kişi) oy verebilir.
+        Proje üyeleri ve admin oy veremez (admin sadece onay verebilir).
         """
         try:
             evaluation = self.evaluation_repo.get(evaluation_id)
@@ -364,46 +365,38 @@ class ChallengeEvaluationService:
                     "message": "❌ Challenge bulunamadı."
                 }
 
-            # Proje sahibi mi kontrol et (double-check güvenlik)
+            # Admin oy veremez, sadece onay verebilir
             ADMIN_USER_ID = "U02LAJFJJLE"  # Akademi owner
-            if user_id != ADMIN_USER_ID:  # Admin her zaman oy verebilir
-                # Creator kontrolü
-                if challenge.get("creator_id") == user_id:
-                    return {
-                        "success": False,
-                        "message": "❌ Kendi projenize oy veremezsiniz."
-                    }
-                
-                # Participant kontrolü
-                participants = self.participant_repo.list(filters={"challenge_hub_id": challenge["id"]})
-                participant_ids = [p["user_id"] for p in participants]
-                if user_id in participant_ids:
-                    return {
-                        "success": False,
-                        "message": "❌ Kendi projenize oy veremezsiniz."
-                    }
+            if user_id == ADMIN_USER_ID:
+                return {
+                    "success": False,
+                    "message": "❌ Admin olarak oy veremezsiniz. Sadece 'Onayla ve Bitir' / 'Reddet ve Bitir' butonlarını kullanabilirsiniz."
+                }
 
-            # Değerlendirici kontrolü (Admin için istisna)
-            ADMIN_USER_ID = "U02LAJFJJLE"
-            evaluator = self.evaluator_repo.get_by_evaluation_and_user(evaluation_id, user_id)
+            # Proje sahibi mi kontrol et (double-check güvenlik)
+            # Creator kontrolü
+            if challenge.get("creator_id") == user_id:
+                return {
+                    "success": False,
+                    "message": "❌ Kendi projenize oy veremezsiniz."
+                }
             
-            # Admin evaluator listesinde olmasa bile oy verebilir
-            if not evaluator and user_id != ADMIN_USER_ID:
+            # Participant kontrolü
+            participants = self.participant_repo.list(filters={"challenge_hub_id": challenge["id"]})
+            participant_ids = [p["user_id"] for p in participants]
+            if user_id in participant_ids:
+                return {
+                    "success": False,
+                    "message": "❌ Kendi projenize oy veremezsiniz."
+                }
+
+            # Değerlendirici kontrolü (sadece harici değerlendiriciler oy verebilir)
+            evaluator = self.evaluator_repo.get_by_evaluation_and_user(evaluation_id, user_id)
+            if not evaluator:
                 return {
                     "success": False,
                     "message": "❌ Bu değerlendirmenin değerlendiricisi değilsiniz."
                 }
-            
-            # Admin için evaluator kaydı yoksa oluştur
-            if user_id == ADMIN_USER_ID and not evaluator:
-                evaluator_id = str(uuid.uuid4())
-                self.evaluator_repo.create({
-                    "id": evaluator_id,
-                    "evaluation_id": evaluation_id,
-                    "user_id": user_id
-                })
-                evaluator = self.evaluator_repo.get(evaluator_id)
-                logger.info(f"[+] Admin evaluator olarak eklendi: {user_id} | Evaluation: {evaluation_id}")
 
             # Zaten oy vermiş mi?
             if evaluator.get("vote"):
