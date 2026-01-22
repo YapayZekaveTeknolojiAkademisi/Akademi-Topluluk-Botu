@@ -90,6 +90,7 @@ ADMIN_CHANNEL_ID=C1234567
 5. **Event Subscriptions:** Aşağıdaki event'leri subscribe edin:
    - `message.channels` - Challenge kanallarında "bitir" mesajı algılama için
    - `member_joined_channel` - Challenge kanallarına yetkisiz kullanıcı kontrolü için
+   - `member_left_channel` - Değerlendirme kanalından ayrılan kullanıcı kontrolü için
 
 ---
 
