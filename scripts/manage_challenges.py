@@ -82,12 +82,20 @@ class ChallengeManager:
             if "ended_at" not in cols:
                 alter_statements.append("ALTER TABLE challenge_hubs ADD COLUMN ended_at TIMESTAMP;")
 
+            # challenge_evaluations tablosundaki kolonları kontrol et
+            cursor.execute("PRAGMA table_info(challenge_evaluations)")
+            eval_cols = {row["name"] for row in cursor.fetchall()}
+            
+            if "jury_status" not in eval_cols:
+                alter_statements.append("ALTER TABLE challenge_evaluations ADD COLUMN jury_status TEXT DEFAULT 'recruiting';")
+                console.print("[yellow]⚠️ jury_status kolonu eksik, ekleniyor...[/yellow]")
+
             for stmt in alter_statements:
                 cursor.execute(stmt)
 
             if alter_statements:
                 conn.commit()
-                console.print("[green]✅ challenge_hubs şeması otomatik olarak güncellendi.[/green]")
+                console.print("[green]✅ Veritabanı şeması otomatik olarak güncellendi.[/green]")
             
             # Gereksiz kolon kontrolü (canvas_id - kodda kullanılmıyor)
             if "canvas_id" in cols:

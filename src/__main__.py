@@ -45,6 +45,14 @@ def ensure_database_schema():
         if "ended_at" not in cols:
             migrations.append("ALTER TABLE challenge_hubs ADD COLUMN ended_at TIMESTAMP;")
         
+        # challenge_evaluations tablosundaki kolonları kontrol et
+        cursor.execute("PRAGMA table_info(challenge_evaluations)")
+        eval_cols = {row["name"] for row in cursor.fetchall()}
+        
+        if "jury_status" not in eval_cols:
+            migrations.append("ALTER TABLE challenge_evaluations ADD COLUMN jury_status TEXT DEFAULT 'recruiting';")
+            logger.info("[i] jury_status kolonu eksik, eklenecek...")
+        
         # Gereksiz kolonları temizle (canvas_id - kodda kullanılmıyor, summary_message_ts kullanılıyor)
         if "canvas_id" in cols:
             logger.info("[i] Gereksiz canvas_id kolonu tespit edildi (summary_message_ts kullanılıyor). Kaldırılıyor...")

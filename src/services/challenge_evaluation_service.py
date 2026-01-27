@@ -446,6 +446,11 @@ class ChallengeEvaluationService:
         """
         Kullanıcıyı jüri havuzuna ekler veya çıkarır (Toggle).
         3 kişi dolduğunda toplu olarak kanala davet eder.
+        
+        Jury Status Durumları:
+        - 'recruiting': 0-2 kişi, toggle serbestçe yapılabilir
+        - 'finalizing': 3. kişi eklendi, davet işlemleri yapılıyor (toggle KİLİTLİ)
+        - 'locked': Davet tamamlandı, jüri ekibi artık değiştirilemez (toggle KİLİTLİ)
         """
         try:
             evaluation = self.evaluation_repo.get(evaluation_id)
@@ -456,7 +461,18 @@ class ChallengeEvaluationService:
             if not challenge:
                 return {"success": False, "message": "❌ Challenge bulunamadı."}
 
-            # Proje sahibi/üyesi/admin kontrolü - bunlar jüri olamaz
+            # 1. STATUS KONTROLÜ - Jüri finalize edilmişse/ediliyorsa toggle yapılamaz
+            jury_status = evaluation.get("jury_status", "recruiting")
+            
+            if jury_status in ["finalizing", "locked"]:
+                return {
+                    "success": False,
+                    "message": "⚠️ Jüri ekibi tamamlandı veya işlem yapılıyor. Artık değişiklik yapılamaz.",
+                    "action": "locked",
+                    "status": jury_status
+                }
+
+            # 2. Proje sahibi/üyesi/admin kontrolü - bunlar jüri olamaz
             settings = get_settings()
             ADMIN_USER_ID = settings.admin_slack_id
             creator_id = challenge.get("creator_id")
@@ -470,25 +486,12 @@ class ChallengeEvaluationService:
                     "action": "none"
                 }
 
-            # Zaten jüri mi? (Toggle Mantığı)
+            # 3. Zaten jüri mi? (Toggle Mantığı)
             existing_juror = self.evaluator_repo.get_by_evaluation_and_user(evaluation_id, user_id)
             
             if existing_juror:
                 # VARSA -> ÇIKAR (LEAVE)
-                # Önce: Jüri ekibi tamamlanmış mı kontrol et (3 kişi zaten kanala davet edildiyse çıkamasın)
-                current_count = self.evaluator_repo.count_evaluators(evaluation_id)
-                if current_count >= 3:
-                    # Jüri ekibi tamamlanmış, artık çıkılamaz
-                    # Çünkü zaten kanala davet edilmişler ve oy verme sürecine başlamışlar
-                    return {
-                        "success": False,
-                        "message": "⚠️ Jüri ekibi tamamlandı. Artık listeden çıkamazsınız.",
-                        "action": "locked",
-                        "count": current_count,
-                        "max": 3
-                    }
-                
-                # Jüri ekibi henüz tamamlanmamış, çıkabilir
+                # Status 'recruiting' olduğu için çıkabilir
                 self.evaluator_repo.delete(existing_juror["id"])
                 logger.info(f"[-] Jüri havuzundan çıktı: {user_id} | Evaluation: {evaluation_id}")
                 
@@ -527,8 +530,6 @@ class ChallengeEvaluationService:
                 # Kullanıcıyı users tablosuna ekle (foreign key için gerekli)
                 try:
                     from src.clients import DatabaseClient
-                    # get_settings zaten dosyanın başında import edilmiş, tekrar import etmeye gerek yok
-                    # settings zaten yukarıda (satır 427) tanımlı
                     db_client = DatabaseClient(db_path=settings.database_path)
                     
                     with db_client.get_connection() as conn:
@@ -572,13 +573,18 @@ class ChallengeEvaluationService:
                         )
                 except: pass
 
-                # EĞER 3. KİŞİ İSE -> TOPLU DAVET VE BAŞLAT
+                # 4. EĞER 3. KİŞİ İSE -> STATUS KİLİTLE VE TOPLU DAVET BAŞLAT
                 if current_count >= 3:
-                     # 1. 3 Jüriyi Al
+                    # ⚠️ ÖNEMLİ: Önce status'ü "finalizing" yap (LOCK)
+                    # Bu sayede başka biri toggle yapamaz
+                    self.evaluation_repo.update(evaluation_id, {"jury_status": "finalizing"})
+                    logger.info(f"[🔒] Jüri status: 'finalizing' | Evaluation: {evaluation_id}")
+                    
+                    # 3 Jüriyi Al
                     all_jurors = self.evaluator_repo.list_by_evaluation(evaluation_id)
                     juror_ids = [j["user_id"] for j in all_jurors]
                     
-                    # 2. Kanala Davet Et (Batch)
+                    # Kanala Davet Et (Batch)
                     eval_channel_id = evaluation.get("evaluation_channel_id")
                     if eval_channel_id:
                         try:
@@ -605,9 +611,15 @@ class ChallengeEvaluationService:
                                             text="🚀 Jüri ekibi tamamlandı ve kanala eklendiniz! Görev başına!"
                                         )
                                 except: pass
+                            
+                            # ✅ Davet tamamlandı, status'ü "locked" yap
+                            self.evaluation_repo.update(evaluation_id, {"jury_status": "locked"})
+                            logger.info(f"[✅] Jüri status: 'locked' | Evaluation: {evaluation_id}")
                                 
                         except Exception as e:
                             logger.error(f"[X] Jüri batch davet hatası: {e}")
+                            # Hata durumunda status'ü geri al
+                            self.evaluation_repo.update(evaluation_id, {"jury_status": "recruiting"})
 
                 return {
                     "success": True,
@@ -615,7 +627,8 @@ class ChallengeEvaluationService:
                     "action": "joined",
                     "count": current_count,
                     "max": 3,
-                    "is_full": (current_count >= 3)
+                    "is_full": (current_count >= 3),
+                    "status": "locked" if current_count >= 3 else "recruiting"
                 }
 
         except Exception as e:

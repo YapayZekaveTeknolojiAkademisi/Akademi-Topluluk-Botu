@@ -1048,9 +1048,10 @@ def setup_challenge_handlers(
                     text=result["message"]
                 )
                 
-                # Buton üzerindeki sayıyı güncelle (Eğer mümkünse)
-                # Not: Slack'te butonu herkese farklı gösteremeyiz, ancak blokları güncelleyerek
-                # tüm kanal için sayıyı güncelleyebiliriz (X/3).
+                # Buton üzerindeki sayıyı güncelle
+                # Status kontrolü - eğer locked ise mesajı tamamen değiştir
+                result_status = result.get("status", "recruiting")
+                
                 if result.get("success") and result.get("action") in ["joined", "left"]:
                     new_count = result.get("count", 0)
                     is_full = result.get("is_full", False)
@@ -1065,27 +1066,54 @@ def setup_challenge_handlers(
                     # Butonu bul ve güncelle veya kaldır
                     for block in new_blocks:
                         if block.get("type") == "actions":
-                            if is_full:
-                                # Dolduysa butonu kaldır ve bilgi mesajı ekle
-                                block["elements"] = [] # Elementleri boşalt (veya bloğu sil)
+                            if is_full or result_status == "locked":
+                                # Dolduysa/Lock'landıysa butonu kaldır
+                                block["elements"] = []
                             else:
                                 # Dolmadıysa sayıyı güncelle
                                 for elem in block["elements"]:
                                     if elem.get("action_id") == "challenge_join_jury_toggle":
                                         elem["text"]["text"] = f"🙋 Jüri Ol ({new_count}/3)"
                     
-                    # Eğer dolduysa actions bloğunu tamamen kaldırabiliriz veya "Jüri Tamamlandı" yazabiliriz
-                    if is_full:
+                    # Eğer dolduysa/lock'landıysa actions bloğunu kaldır ve durum mesajı ekle
+                    if is_full or result_status == "locked":
                         new_blocks = [b for b in new_blocks if b.get("type") != "actions"]
                         new_blocks.append({
                             "type": "context",
-                            "elements": [{"type": "mrkdwn", "text": "✅ *Jüri Ekibi Tamamlandı! Değerlendirme başladı.*"}]
+                            "elements": [{"type": "mrkdwn", "text": "🔒 *Jüri Ekibi Tamamlandı! Değerlendirme başladı.*"}]
                         })
 
                     chat_manager.update_message(
                         channel=channel_id,
                         ts=message_ts,
                         text="🗳️ Jüri Aranıyor (Güncellendi)",
+                        blocks=new_blocks
+                    )
+                
+                elif result.get("action") == "locked":
+                    # Status "locked" veya "finalizing" durumunda - Zaten tamamlanmış
+                    # UI'da da bunu gösterelim
+                    message_ts = body["message"]["ts"]
+                    original_blocks = body["message"]["blocks"]
+                    
+                    import copy
+                    new_blocks = copy.deepcopy(original_blocks)
+                    
+                    # Actions bloğunu kaldır
+                    new_blocks = [b for b in new_blocks if b.get("type") != "actions"]
+                    
+                    # Kontrol et, zaten context mesajı var mı?
+                    has_context = any(b.get("type") == "context" for b in new_blocks)
+                    if not has_context:
+                        new_blocks.append({
+                            "type": "context",
+                            "elements": [{"type": "mrkdwn", "text": "🔒 *Jüri Ekibi Tamamlandı! Artık değişiklik yapılamaz.*"}]
+                        })
+                    
+                    chat_manager.update_message(
+                        channel=channel_id,
+                        ts=message_ts,
+                        text="🗳️ Jüri Ekibi Kilitlendi",
                         blocks=new_blocks
                     )
 
