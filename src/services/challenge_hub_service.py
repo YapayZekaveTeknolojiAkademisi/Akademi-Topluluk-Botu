@@ -909,17 +909,16 @@ class ChallengeHubService:
                         if evaluation_channel_id:
                             self.chat.post_message(
                                 channel=channel_id,
-                                text=f"🚀 Challenge tamamlandı! Değerlendirme süreci için <#{evaluation_channel_id}> kanalına geçiyoruz...",
+                                text=f"🚀 Challenge tamamlandı! Değerlendirme kanalı açıldı. Lütfen <#{evaluation_channel_id}> kanalında devam edin.",
                                 blocks=[
                                     {
                                         "type": "section",
                                         "text": {
                                             "type": "mrkdwn",
                                             "text": (
-                                                f"🎊 *Tebrikler Ekip! Challenge Tamamlandı!* 🎊\n\n"
-                                                f"Süreç artık *Değerlendirme Aşamasına* geçti.\n"
-                                                f"Tüm ekip üyeleri otomatik olarak yeni kanala taşınıyor: <#{evaluation_channel_id}>\n\n"
-                                                f"⏳ *Önemli:* Bu kanal *4 saat sonra* otomatik olarak arşivlenecektir. Bu süre zarfında değerlendirme kanalına geçiş yapabilir ve eski mesajları kontrol edebilirsiniz. 👋"
+                                                f"🚀 *Challenge Tamamlandı!*\n\n"
+                                                f"Değerlendirme kanalı açıldı. Lütfen <#{evaluation_channel_id}> kanalında devam edin.\n\n"
+                                                f"💡 Tüm ekip üyeleri otomatik olarak değerlendirme kanalına eklendi."
                                             )
                                         }
                                     }

@@ -343,6 +343,31 @@ class ChallengeEvaluationService:
                     text="👋 Değerlendirme Başladı!",
                     blocks=welcome_blocks
                 )
+                
+                # 5. Challenge kanalına yönlendirme mesajı gönder
+                challenge_channel_id = challenge.get("challenge_channel_id")
+                if challenge_channel_id:
+                    try:
+                        self.chat.post_message(
+                            channel=challenge_channel_id,
+                            text="🚀 Challenge tamamlandı! Değerlendirme süreci başladı.",
+                            blocks=[
+                                {
+                                    "type": "section",
+                                    "text": {
+                                        "type": "mrkdwn",
+                                        "text": (
+                                            "🚀 *Challenge Tamamlandı!*\n\n"
+                                            f"Değerlendirme süreci başladı. Lütfen <#{eval_channel_id}> kanalında devam edin.\n\n"
+                                            "💡 *Not:* Tüm ekip üyeleri otomatik olarak değerlendirme kanalına eklendi."
+                                        )
+                                    }
+                                }
+                            ]
+                        )
+                        logger.info(f"[+] Challenge kanalına yönlendirme mesajı gönderildi: {challenge_channel_id}")
+                    except Exception as e:
+                        logger.warning(f"[!] Challenge kanalına yönlendirme mesajı gönderilemedi: {e}")
             except Exception as e:
                 logger.warning(f"[!] Değerlendirme açılış mesajı gönderilemedi: {e}")
 
