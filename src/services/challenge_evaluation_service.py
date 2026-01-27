@@ -109,11 +109,29 @@ class ChallengeEvaluationService:
                     if deadline else "Belirlenmedi"
                 )
                 
-                # Katılımcı sayısı
+                # Katılımcı bilgisi (Slack profilleri ile)
                 participants = self.participant_repo.get_team_members(ch_id)
-                participant_count = len(participants)
+                participant_ids = [p["user_id"] for p in participants]
+                creator_id = ch.get("creator_id")
+                if creator_id and creator_id not in participant_ids:
+                    participant_ids.insert(0, creator_id)
+                
+                participant_count = len(participant_ids)
                 team_size = ch.get("team_size", 0)
-                team_info = f"{participant_count}/{team_size}"
+                
+                # Slack profillerini linkle (ilk 3 kişi + sayı)
+                if participant_ids:
+                    # İlk 3 kişiyi göster
+                    shown_users = participant_ids[:3]
+                    user_mentions = ", ".join(f"<@{uid}>" for uid in shown_users)
+                    remaining = participant_count - len(shown_users)
+                    
+                    if remaining > 0:
+                        team_info = f"{user_mentions} +{remaining} ({participant_count}/{team_size})"
+                    else:
+                        team_info = f"{user_mentions} ({participant_count}/{team_size})"
+                else:
+                    team_info = f"0/{team_size}"
                 
                 # GitHub durumu
                 github_info = "❌ Yok"
@@ -148,16 +166,19 @@ class ChallengeEvaluationService:
             
             # Yatay tablo formatında canvas mesajı oluştur
             # Slack'te monospace font için code block kullan
+            # Takım kolonu için daha geniş alan (Slack mention'lar uzun olabilir)
             table_lines = [
                 "```",
-                f"{'Tema':<20} | {'Proje':<25} | {'Durum':<15} | {'Bitiş':<12} | {'Takım':<8} | {'GitHub':<12} | {'Oylar':<10}",
-                "-" * 120
+                f"{'Tema':<20} | {'Proje':<25} | {'Durum':<15} | {'Bitiş':<12} | {'Takım':<40} | {'GitHub':<12} | {'Oylar':<10}",
+                "-" * 150
             ]
             
             for row in table_rows:
+                # Takım bilgisini kısalt (çok uzunsa)
+                team_display = row['team'][:38] + ".." if len(row['team']) > 40 else row['team']
                 table_lines.append(
                     f"{row['theme']:<20} | {row['project']:<25} | {row['status']:<15} | "
-                    f"{row['deadline']:<12} | {row['team']:<8} | {row['github']:<12} | {row['votes']:<10}"
+                    f"{row['deadline']:<12} | {team_display:<40} | {row['github']:<12} | {row['votes']:<10}"
                 )
             
             table_lines.append("```")
