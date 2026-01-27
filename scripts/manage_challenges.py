@@ -23,6 +23,13 @@ except ImportError:
     print("❌ Error: 'rich' library is missing. Please install it: pip install rich")
     sys.exit(1)
 
+try:
+    from slack_sdk import WebClient
+    from slack_sdk.errors import SlackApiError
+except ImportError:
+    print("❌ Error: 'slack_sdk' library is missing. Please install it: pip install slack_sdk")
+    sys.exit(1)
+
 from src.core.settings import get_settings
 
 console = Console()
@@ -35,6 +42,10 @@ class ChallengeManager:
         if not os.path.exists(self.db_path):
             console.print(f"[bold red]❌ Database not found at:[/bold red] {self.db_path}")
             sys.exit(1)
+            
+        # Slack Client (for channel analysis)
+        self.slack_client = WebClient(token=self.settings.slack_bot_token)
+        self.user_client = WebClient(token=self.settings.slack_user_token) if self.settings.slack_user_token else None
 
     def get_connection(self):
         conn = sqlite3.connect(self.db_path)
@@ -343,6 +354,147 @@ class ChallengeManager:
                 uid = input("Enter User ID to reset: ")
                 self.reset_user(uid)
 
+    def import_channel(self, channel_id: str):
+        """Analyze a Slack channel and import it as a challenge hub."""
+        console.print(f"[yellow]🔍 Analyzing channel: {channel_id}...[/yellow]")
+        
+        try:
+            # 1. Fetch Channel Info
+            ch_info = self.slack_client.conversations_info(channel=channel_id)
+            channel = ch_info["channel"]
+            channel_name = channel.get("name", "N/A")
+            created_ts = channel.get("created", 0)
+            created_at = datetime.fromtimestamp(created_ts).isoformat()
+            
+            # 2. Fetch Members
+            members_resp = self.slack_client.conversations_members(channel=channel_id)
+            members = members_resp.get("members", [])
+            bot_id = self.slack_client.auth_test()["user_id"]
+            human_members = [m for m in members if m != bot_id]
+            
+            console.print(Panel(f"[bold green]✅ Channel Found: #{channel_name}[/bold green]\n"
+                              f"📅 Created: {created_at}\n"
+                              f"👥 Members: {len(human_members)} humans"))
+
+            # 3. Guess Creator (Oldest message or channel creator)
+            creator_id = channel.get("creator")
+            
+            # 4. Fetch Themes/Projects for Selection
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name FROM challenge_themes")
+            themes = cursor.fetchall()
+            
+            if not themes:
+                console.print("[red]❌ No themes found in database. Cannot create challenge.[/red]")
+                conn.close()
+                return
+
+            console.print("\n[bold]Select Theme:[/bold]")
+            for i, t in enumerate(themes, 1):
+                console.print(f"[{i}] {t['name']}")
+            
+            theme_idx = int(input("\n👉 Choice: ") or "1") - 1
+            selected_theme = themes[theme_idx]['name']
+            
+            # 5. List Projects in Theme
+            cursor.execute("SELECT id, name FROM challenge_projects WHERE theme = ?", (selected_theme,))
+            projects = cursor.fetchall()
+            selected_project_id = None
+            if projects:
+                console.print(f"\n[bold]Select Project for {selected_theme}:[/bold]")
+                for i, p in enumerate(projects, 1):
+                    console.print(f"[{i}] {p['name']}")
+                p_idx = int(input("\n👉 Choice (or Enter for None): ") or "0") - 1
+                if p_idx >= 0:
+                    selected_project_id = projects[p_idx]['id']
+            
+            # 6. Final Confirmation
+            console.print(f"\n[bold cyan]Import Plan:[/bold cyan]")
+            console.print(f"- Theme: {selected_theme}")
+            console.print(f"- Project: {selected_project_id or 'TBD'}")
+            console.print(f"- Creator: {creator_id}")
+            console.print(f"- Participants: {', '.join(human_members)}")
+            
+            confirm = input("\n🚀 Proceed with import? (y/n): ")
+            if confirm.lower() != 'y':
+                console.print("[yellow]Import cancelled.[/yellow]")
+                conn.close()
+                return
+
+            # 7. Insert Hub
+            import uuid
+            hub_id = str(uuid.uuid4())
+            cursor.execute("""
+                INSERT INTO challenge_hubs (id, creator_id, theme, team_size, status, challenge_channel_id, selected_project_id, created_at, started_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (hub_id, creator_id, selected_theme, len(human_members), 'active', channel_id, selected_project_id, created_at, created_at))
+            
+            # 8. Insert Participants
+            for m_id in human_members:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO challenge_participants (id, challenge_hub_id, user_id, role)
+                    VALUES (?, ?, ?, ?)
+                """, (str(uuid.uuid4()), hub_id, m_id, 'member' if m_id != creator_id else 'lead'))
+                
+            conn.commit()
+            conn.close()
+            console.print(f"[bold green]✅ Success! Channel imported as challenge ID: {hub_id[:8]}[/bold green]")
+            
+        except SlackApiError as e:
+            console.print(f"[bold red]❌ Slack API Error: {e.response['error']}[/bold red]")
+        except Exception as e:
+            console.print(f"[bold red]❌ Error: {e}[/bold red]")
+
+    def manual_create_challenge(self):
+        """Manually create or restore a challenge hub record."""
+        console.print(Panel("[bold yellow]🛠️  Manual Challenge Entry / Restore[/bold yellow]"))
+        
+        try:
+            channel_id = input("Enter Slack Channel ID (C...): ").strip()
+            theme = input("Enter Theme Name (e.g. AI Chatbot): ").strip()
+            creator_id = input("Enter Creator Slack ID (U...): ").strip()
+            participants_raw = input("Enter Participant IDs (U..., separated by commas): ").strip()
+            
+            p_ids = [p.strip() for p in participants_raw.split(",") if p.strip()]
+            
+            console.print("\n[bold]Select Status:[/bold]")
+            console.print("1. Recruiting 🟡")
+            console.print("2. Active 🟢 (Default)")
+            console.print("3. Evaluating 🟣")
+            console.print("4. Completed 🔵")
+            status_choice = input("Choice [2]: ") or "2"
+            status_map = {"1": "recruiting", "2": "active", "3": "evaluating", "4": "completed"}
+            status = status_map.get(status_choice, "active")
+
+            # 1. Hub table entry
+            import uuid
+            hub_id = str(uuid.uuid4())
+            
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO challenge_hubs (id, creator_id, theme, team_size, status, challenge_channel_id, created_at, started_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """, (hub_id, creator_id, theme, len(p_ids), status, channel_id))
+            
+            # 2. Participants
+            for m_id in p_ids:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO challenge_participants (id, challenge_hub_id, user_id, role)
+                    VALUES (?, ?, ?, ?)
+                """, (str(uuid.uuid4()), hub_id, m_id, 'member' if m_id != creator_id else 'lead'))
+                
+            conn.commit()
+            conn.close()
+            
+            console.print(f"[bold green]✅ Success! Manual record created with Hub ID: {hub_id[:8]}[/bold green]")
+            
+        except Exception as e:
+            console.print(f"[bold red]❌ Error during manual creation: {e}[/bold red]")
+
+
 def interactive_menu():
     """Show interactive menu."""
     manager = ChallengeManager()
@@ -352,11 +504,13 @@ def interactive_menu():
         console.print(Panel.fit("[bold cyan]🤖 Cemil Bot Challenge Manager v2.0[/bold cyan]", border_style="cyan"))
         
         console.print("[1] 🏆 List Challenges")
-        console.print("[2] �️  Check Stuck Users")
-        console.print("[3] �🔍 Get Challenge Info")
-        console.print("[4] 🔄 Update Status")
-        console.print("[5] 👤 Reset User")
-        console.print("[6] 🗑️  Delete Challenge")
+        console.print("[2] 🕵️  Check Stuck Users")
+        console.print("[3] 📥 Import Slack Channel")
+        console.print("[4] 🔍 Get Challenge Info")
+        console.print("[5] 🔄 Update Status")
+        console.print("[6] 👤 Reset User")
+        console.print("[7] 🗑️  Delete Challenge")
+        console.print("[8] 🛠️  Manual Entry (Restore)")
         console.print("[0] 🚪 Exit")
         
         choice = input("\n👉 Select an option: ")
@@ -378,12 +532,18 @@ def interactive_menu():
             input("\nPress Enter to continue...")
             
         elif choice == "3":
+            cid = input("Enter Slack Channel ID (C...): ")
+            if cid:
+                manager.import_channel(cid)
+                input("\nPress Enter to continue...")
+                
+        elif choice == "4":
             cid = input("Enter Challenge ID: ")
             if cid:
                 manager.get_challenge_info(cid)
                 input("\nPress Enter to continue...")
                 
-        elif choice == "4":
+        elif choice == "5":
             cid = input("Enter Challenge ID: ")
             if cid:
                 console.print("\n[bold]Select New Status:[/bold]")
@@ -407,16 +567,21 @@ def interactive_menu():
                 input("\nPress Enter to continue...")
                 
         elif choice == "5":
+        elif choice == "6": # Corrected from duplicate '5'
             uid = input("Enter User Slack ID: ")
             if uid:
                 manager.reset_user(uid)
                 input("\nPress Enter to continue...")
                 
-        elif choice == "6":
+        elif choice == "7": # Corrected from '6'
             cid = input("Enter Challenge ID: ")
             if cid:
                 manager.delete_challenge(cid)
                 input("\nPress Enter to continue...")
+                
+        elif choice == "8": # New option
+            manager.manual_create_challenge()
+            input("\nPress Enter to continue...")
                 
         elif choice == "0":
             console.print("[yellow]Bye! 👋[/yellow]")
