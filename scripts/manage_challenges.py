@@ -361,13 +361,16 @@ class ChallengeManager:
     def clear_all_challenges(self, skip_confirm=False):
         """
         Tüm challenge verilerini temizler (sıfırdan başlamak için).
-        Challenge'lar, evaluations, participants, evaluators ve stats temizlenir.
+        Challenge'lar, evaluations, participants, evaluators ve kullanıcı istatistikleri temizlenir.
+        Bu işlem sonrasında tüm kullanıcılar yeni challenge'lara katılabilir.
         """
         conn = self.get_connection()
         cursor = conn.cursor()
         
         console.print("[bold red]⚠️  UYARI: Bu işlem TÜM challenge verilerini silecektir![/bold red]")
         console.print("[yellow]Bu işlem geri alınamaz![/yellow]")
+        console.print("[cyan]💡 Tüm challenge'lar, katılımcılar, değerlendirmeler ve kullanıcı istatistikleri temizlenecek.[/cyan]")
+        console.print("[cyan]💡 Bu sayede tüm kullanıcılar yeni challenge'lara katılabilir (katılım sınırları kaldırılacak).[/cyan]")
         
         # Önce sayıları göster
         try:
@@ -386,12 +389,16 @@ class ChallengeManager:
             cursor.execute("SELECT COUNT(*) as count FROM user_challenge_stats")
             stats_count = cursor.fetchone()['count']
             
+            # Aktif challenge sayısını da göster
+            cursor.execute("SELECT COUNT(*) as count FROM challenge_hubs WHERE status IN ('recruiting', 'active', 'evaluating')")
+            active_count = cursor.fetchone()['count']
+            
             console.print(f"\n[bold]Mevcut Veriler:[/bold]")
-            console.print(f"  📊 Challenge Hubs: {hub_count}")
+            console.print(f"  📊 Challenge Hubs (Toplam): {hub_count} [yellow](Aktif: {active_count})[/yellow]")
             console.print(f"  👥 Participants: {participant_count}")
             console.print(f"  📝 Evaluations: {eval_count}")
             console.print(f"  ⚖️  Evaluators: {evaluator_count}")
-            console.print(f"  📈 User Stats: {stats_count}")
+            console.print(f"  📈 User Stats (Katılım İstatistikleri): {stats_count}")
         except Exception as e:
             console.print(f"[red]⚠️  Veri sayımı hatası: {e}[/red]")
         
@@ -435,6 +442,8 @@ class ChallengeManager:
             total_deleted = sum(deleted_counts.values())
             console.print(f"\n[bold green]✅ Tüm challenge verileri temizlendi![/bold green]")
             console.print(f"[bold]Toplam silinen kayıt: {total_deleted}[/bold]")
+            console.print(f"[bold green]✅ Kullanıcı katılım sınırları kaldırıldı![/bold green]")
+            console.print(f"[cyan]💡 Artık tüm kullanıcılar yeni challenge'lara katılabilir.[/cyan]")
             
         except Exception as e:
             conn.rollback()
