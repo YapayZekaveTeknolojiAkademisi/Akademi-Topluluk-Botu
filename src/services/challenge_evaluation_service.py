@@ -125,20 +125,26 @@ class ChallengeEvaluationService:
                 # team_size creator hariç sayı, toplam = team_size + 1 (creator dahil)
                 total_team_size = team_size + 1
                 
-                # Slack profillerini linkle (ilk 3 kişi + sayı)
+                # Slack profillerini linkle
+                # Kural:
+                # - 7 kişiye kadar: TÜM üyeleri tek tek göster
+                # - 7'den fazla: İlk 3 kişi + "+N" formatı
                 if participant_ids:
-                    # İlk 3 kişiyi göster
-                    shown_users = participant_ids[:3]
-                    
                     # Slack Canvas'ta mention formatı: ![](@USER_ID)
                     # Canvas markdown'ta mention'lar için özel format kullanılır
-                    user_mentions = ", ".join(f"![](@{uid})" for uid in shown_users)
-                    remaining = participant_count - len(shown_users)
-                    
-                    if remaining > 0:
-                        team_info = f"{user_mentions} +{remaining} ({participant_count}/{total_team_size})"
-                    else:
+                    if participant_count <= 7:
+                        # Tüm ekibi göster
+                        user_mentions = ", ".join(f"![](@{uid})" for uid in participant_ids)
                         team_info = f"{user_mentions} ({participant_count}/{total_team_size})"
+                    else:
+                        # İlk 3 kişiyi göster + kalan sayısı
+                        shown_users = participant_ids[:3]
+                        user_mentions = ", ".join(f"![](@{uid})" for uid in shown_users)
+                        remaining = participant_count - len(shown_users)
+                        if remaining > 0:
+                            team_info = f"{user_mentions} +{remaining} ({participant_count}/{total_team_size})"
+                        else:
+                            team_info = f"{user_mentions} ({participant_count}/{total_team_size})"
                 else:
                     team_info = f"0/{total_team_size}"
                 
@@ -896,10 +902,12 @@ class ChallengeEvaluationService:
 
             # Oyları güncelle
             votes = self.evaluator_repo.get_votes(evaluation_id)
+            true_votes = votes["true"]
+            false_votes = votes["false"]
             self.evaluation_repo.update_votes(
                 evaluation_id,
-                votes["true"],
-                votes["false"]
+                true_votes,
+                false_votes
             )
 
             logger.info(f"[+] Oy kaydedildi: {user_id} | Vote: {vote} | Evaluation: {evaluation_id}")
@@ -912,7 +920,7 @@ class ChallengeEvaluationService:
                 logger.warning(f"[!] Oy sonrası canvas güncellenemedi: {e}")
 
             # 3 kişi oy verdiyse kontrol et
-            total_votes = votes["true"] + votes["false"]
+            total_votes = true_votes + false_votes
             if total_votes >= 3:
                 logger.info(f"[i] 3 değerlendirici oy verdi | Evaluation: {evaluation_id}")
                 
@@ -1039,9 +1047,22 @@ class ChallengeEvaluationService:
                         except Exception as e:
                             logger.warning(f"[!] Repo bekleme mesajı gönderilemedi: {e}")
 
+            # Kullanıcıya detaylı özet mesajı hazırla
+            remaining_votes = max(3 - total_votes, 0)
+            vote_label = "Geçer" if vote.lower() == "true" else "Kalır"
+            summary_lines = [
+                f"✅ Oyunuz kaydedildi: *{vote_label}*",
+                "",
+                f"📊 Mevcut durum: ✅ *{true_votes} geçer* / ❌ *{false_votes} kalır* (toplam {total_votes}/3 oy)",
+            ]
+            if remaining_votes > 0:
+                summary_lines.append(f"⏳ Kalan oy: *{remaining_votes}* jüri üyesi daha oy verecek.")
+            else:
+                summary_lines.append("🏁 Tüm jüri oy verdi. GitHub ve admin onayı sonrası sonuç netleşecek.")
+
             return {
                 "success": True,
-                "message": f"✅ Oyunuz kaydedildi: *{vote}*"
+                "message": "\n".join(summary_lines)
             }
 
         except Exception as e:

@@ -65,6 +65,7 @@ def setup_challenge_handlers(
                     "`/challenge join [challenge_id]` - Challenge'a katıl\n"
                     "`/challenge status` - Challenge durumunu görüntüle\n"
                     "`/challenge bitir` - Challenge'ı bitir ve değerlendirmeyi başlat (challenge kanalında)\n"
+                    "`/challenge register` - Mevcut challenge kanalını Cemil'e kaydet\n"
                     "`/challenge set True/False` - Değerlendirme kanalında oy verin\n"
                     "`/challenge set github <link>` - Değerlendirme kanalında GitHub repo linki ekleyin\n"
                     "`/challenge force [success|fail]` - (Admin) Değerlendirmeyi zorla bitir\n\n"
@@ -112,6 +113,8 @@ def setup_challenge_handlers(
             handle_challenge_status(user_id, channel_id)
         elif subcommand == "bitir":
             handle_challenge_finish(user_id, channel_id)
+        elif subcommand == "register":
+            handle_challenge_register(user_id, channel_id)
         elif subcommand == "set":
             handle_challenge_set(subcommand_text, user_id, channel_id)
         elif subcommand == "force":
@@ -288,6 +291,35 @@ def setup_challenge_handlers(
                 )
 
         asyncio.run(process_join())
+
+    def handle_challenge_register(user_id: str, channel_id: str):
+        """
+        Mevcut challenge kanalını (Cemil dışında başlatılmış olsa bile) veritabanına kaydeder.
+        Kullanım: Challenge kanalında `/challenge register`
+        """
+
+        async def process_register():
+            result = await challenge_service.register_existing_channel(
+                channel_id=channel_id,
+                requester_id=user_id
+            )
+
+            message = result.get("message", "ℹ️ İşlem tamamlandı.")
+
+            chat_manager.post_ephemeral(
+                channel=channel_id,
+                user=user_id,
+                text=message,
+                blocks=[{
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": message
+                    }
+                }]
+            )
+
+        asyncio.run(process_register())
 
     def handle_challenge_status(user_id: str, channel_id: str):
         """Challenge durumunu göster."""

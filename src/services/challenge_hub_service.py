@@ -490,6 +490,243 @@ class ChallengeHubService:
                 "error_code": "JOIN_ERROR"
             }
 
+    async def register_existing_channel(
+        self,
+        channel_id: str,
+        requester_id: str
+    ) -> Dict[str, Any]:
+        """
+        Mevcut bir challenge kanalını (Cemil dışında oluşturulmuş olsa bile) veritabanına kaydeder.
+
+        Amaç:
+            - Challenge kanalı zaten varsa ve sonradan Cemil'e entegre edilmek isteniyorsa,
+              /challenge register komutu ile bu kanal challenge_hubs + participants tablolarına işlenir.
+
+        Varsayımlar / Kurallar:
+            - Komut challenge kanalında çalıştırılır.
+            - Kanal üyeleri challenge takımını temsil eder.
+            - Komutu çağıran kişi creator olarak kabul edilir.
+            - ❗ Yalnızca workspace owner / admin veya settings.admin_slack_id bu işlemi yapabilir.
+        """
+        try:
+            # 0. Admin / owner yetki kontrolü
+            settings = get_settings()
+            ADMIN_USER_ID = settings.admin_slack_id
+            is_admin = False
+
+            # a) settings.admin_slack_id ile eşleşiyorsa doğrudan admin kabul et
+            if ADMIN_USER_ID and requester_id == ADMIN_USER_ID:
+                is_admin = True
+                logger.debug(
+                    f"[i] register_existing_channel: admin_slack_id eşleşti | User: {requester_id}"
+                )
+            else:
+                # b) Workspace owner / admin mi kontrol et (Slack API üzerinden)
+                try:
+                    if hasattr(self.chat, "client"):
+                        user_info = self.chat.client.users_info(user=requester_id)
+                        if user_info.get("ok"):
+                            user = user_info.get("user", {})
+                            is_owner = user.get("is_owner", False)
+                            is_admin_flag = user.get("is_admin", False)
+                            is_admin = is_owner or is_admin_flag
+                            if is_admin:
+                                logger.info(
+                                    "[i] register_existing_channel: Workspace owner/admin tespit edildi | "
+                                    f"User: {requester_id} | Owner: {is_owner}, Admin: {is_admin_flag}"
+                                )
+                except Exception as e:
+                    logger.warning(
+                        f"[!] register_existing_channel: Workspace owner kontrolü yapılamadı: {e}"
+                    )
+
+            if not is_admin:
+                logger.warning(
+                    "[!] register_existing_channel: Admin yetkisi reddedildi | "
+                    f"User: {requester_id} | Admin ID: {ADMIN_USER_ID}"
+                )
+                return {
+                    "success": False,
+                    "message": "❌ Sadece admin veya workspace owner `/challenge register` komutunu kullanabilir."
+                }
+
+            # 1. Bu kanal zaten kayıtlı mı?
+            existing = self.hub_repo.get_by_channel_id(channel_id)
+            if existing:
+                logger.info(
+                    f"[i] register_existing_channel: Kanal zaten kayıtlı | "
+                    f"Channel: {channel_id} | Challenge: {existing.get('id')}"
+                )
+                return {
+                    "success": False,
+                    "message": "ℹ️ Bu kanal zaten Cemil tarafından kayıtlı görünüyor."
+                }
+
+            # 2. Kanal üyelerini al
+            try:
+                member_ids = self.conv.get_members(channel_id)
+            except Exception as e:
+                logger.error(f"[X] register_existing_channel: Kanal üyeleri alınamadı: {e}", exc_info=True)
+                return {
+                    "success": False,
+                    "message": "❌ Kanal üyeleri okunamadı. Lütfen daha sonra tekrar deneyin."
+                }
+
+            if not member_ids:
+                return {
+                    "success": False,
+                    "message": "❌ Bu kanalda kayıt edilebilecek bir ekip bulunamadı."
+                }
+
+            # Bot'u listeden çıkar (varsa)
+            bot_user_id = None
+            try:
+                bot_info = self.chat.client.auth_test()
+                if bot_info.get("ok"):
+                    bot_user_id = bot_info.get("user_id")
+            except Exception as e:
+                logger.warning(f"[!] register_existing_channel: Bot user ID alınamadı: {e}")
+
+            unique_members = []
+            for uid in member_ids:
+                if uid == bot_user_id:
+                    continue
+                if uid not in unique_members:
+                    unique_members.append(uid)
+
+            if not unique_members:
+                return {
+                    "success": False,
+                    "message": "❌ Bot dışındaki üyeler bulunamadı. Kayıt yapılamadı."
+                }
+
+            # 3. Komutu çağıran kişiyi creator olarak kabul et
+            creator_id = requester_id
+            if creator_id not in unique_members:
+                unique_members.insert(0, creator_id)
+
+            # Creator dışındaki üyeler takım üyesi olarak kaydedilecek
+            team_member_ids = [uid for uid in unique_members if uid != creator_id]
+
+            # team_size: creator hariç kişi sayısı (en az 1 olsun)
+            team_size = max(len(team_member_ids), 1)
+
+            # 3.5. users tablosunda kullanıcı kayıtlarını garanti altına al
+            if self.db_client:
+                try:
+                    with self.db_client.get_connection() as conn:
+                        cursor = conn.cursor()
+                        for uid in unique_members:
+                            try:
+                                cursor.execute(
+                                    "SELECT id FROM users WHERE slack_id = ?",
+                                    (uid,),
+                                )
+                                row = cursor.fetchone()
+                                if not row:
+                                    user_uuid = str(uuid.uuid4())
+                                    cursor.execute(
+                                        """
+                                        INSERT INTO users (id, slack_id, full_name, created_at, updated_at)
+                                        VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                                        """,
+                                        (user_uuid, uid, f"User {uid}"),
+                                    )
+                                    logger.info(
+                                        "[+] register_existing_channel: Kullanıcı otomatik eklendi "
+                                        f"| Slack ID: {uid} | ID: {user_uuid}"
+                                    )
+                            except Exception as inner_e:
+                                logger.warning(
+                                    f"[!] register_existing_channel: Kullanıcı kontrolü/ekleme hatası "
+                                    f"| User: {uid} | Hata: {inner_e}"
+                                )
+                        conn.commit()
+                except Exception as e:
+                    logger.warning(
+                        f"[!] register_existing_channel: users tablosu güncellenirken hata oluştu: {e}"
+                    )
+
+            # 4. Challenge hub kaydı oluştur
+            challenge_id = str(uuid.uuid4())
+
+            hub_channel_id = settings.startup_channel or self._get_hub_channel()
+
+            hub_data = {
+                "id": challenge_id,
+                "creator_id": creator_id,
+                "theme": "TBD",
+                "team_size": team_size,
+                "status": "active",  # Mevcut kanal zaten aktif bir challenge'ı temsil ediyor varsayımı
+                "challenge_channel_id": channel_id,
+                "hub_channel_id": hub_channel_id,
+                "started_at": datetime.now().isoformat()
+            }
+
+            self.hub_repo.create(hub_data)
+            logger.info(
+                f"[+] Mevcut kanal için challenge kaydı oluşturuldu | "
+                f"Challenge: {challenge_id} | Kanal: {channel_id} | Creator: {creator_id}"
+            )
+
+            # 4.5. İstatistikleri güncelle (creator + takım üyeleri)
+            try:
+                self.stats_repo.increment_total(creator_id)
+                for uid in team_member_ids:
+                    self.stats_repo.increment_total(uid)
+                logger.debug(
+                    f"[i] register_existing_channel: total_challenges güncellendi | "
+                    f"Creator: {creator_id} | Members: {len(team_member_ids)}"
+                )
+            except Exception as e:
+                logger.warning(f"[!] register_existing_channel: İstatistik güncelleme hatası: {e}")
+
+            # 5. Takım üyelerini participants tablosuna ekle
+            for uid in team_member_ids:
+                try:
+                    self.participant_repo.create({
+                        "id": str(uuid.uuid4()),
+                        "challenge_hub_id": challenge_id,
+                        "user_id": uid,
+                        "role": "member"
+                    })
+                except Exception as e:
+                    logger.warning(
+                        f"[!] register_existing_channel: Participant kaydedilemedi | "
+                        f"User: {uid} | Challenge: {challenge_id} | Hata: {e}"
+                    )
+
+            # 6. Canvas'ı güncelle (varsa)
+            try:
+                if self.evaluation_service and hub_channel_id:
+                    await self.evaluation_service.update_challenge_canvas(challenge_id)
+            except Exception as e:
+                logger.warning(f"[!] register_existing_channel: Canvas güncellenemedi: {e}")
+
+            # 7. Kullanıcıya özet mesaj
+            summary_lines = [
+                "✅ *Kanal başarıyla challenge olarak kaydedildi!*",
+                "",
+                f"🆔 *Challenge ID:* `{challenge_id[:8]}...`",
+                f"👤 *Creator:* <@{creator_id}>",
+                f"👥 *Takım:* {len(team_member_ids) + 1} kişi (creator dahil)",
+            ]
+
+            if hub_channel_id:
+                summary_lines.append(f"📣 *Duyuru Kanalı:* <#{hub_channel_id}> (canvas burada güncellenecek)")
+
+            return {
+                "success": True,
+                "message": "\n".join(summary_lines)
+            }
+
+        except Exception as e:
+            logger.error(f"[X] register_existing_channel hatası: {e}", exc_info=True)
+            return {
+                "success": False,
+                "message": "❌ Mevcut kanalı kayıt ederken bir hata oluştu."
+            }
+
     async def _start_challenge(self, challenge_id: str):
         """
         Challenge'ı başlatır (takım dolduğunda).
@@ -833,7 +1070,7 @@ class ChallengeHubService:
                             "📌 *Önemli Bilgiler*\n\n"
                             "⚠️ Bu kanal sadece takım içindir - başkalarını davet etmeyin\n"
                             "💬 Sorularınızı ve ilerlemenizi bu kanalda paylaşın\n"
-                            "🎯 Bitirmek için: `/challenge finish` komutunu kullanın\n\n"
+                            "🎯 Bitirmek için: `/challenge bitir` komutunu kullanın\n\n"
                             "Başarılar! 🚀"
                         )
                     }
